@@ -2,6 +2,6 @@
 *
 
 # But not these files...
-!pongGame.html
+!cube3d.html
 !gl-matrix.js
 

@@ -1,0 +1,440 @@
+<!--
+IDEAS:
+- Add object
+- Object movement - maybe rotating, object following player (tu posicion - la de el y camino un pasito en su direccion) 
+- Add cube collision
+- Disparar a las cosas
+- Cuando disparas sigue la trayectoria a la que miras
+- Cambiar el movimiento - acelerar y frenar (la tecla puede acelerar - velocidad crucero || o frenar)
+- Volar (ver cubo desde arriba)
+- Hacer juego en 3d
+- ETC
+-->
+
+<!doctype html>
+<html>
+  
+   <!-- STEP 1: Prepare the canvas -->
+   <head>
+      <style>
+         #my_Canvas{border: 5px dotted red}
+      </style>
+     
+     <script type="text/javascript" src="gl-matrix.js"></script>
+     
+   </head>
+  
+   <body> <!-- 1800 x 900 -->
+      <canvas width = "500" height = "500" id = "my_Canvas"></canvas>
+
+   <!-- vertex Shader -->
+   <script id="vertex-shader" type="x-shader/x-vertex">
+       #version 300 es
+       precision mediump float;
+
+       in vec3 aCoordinates; // Modified from vec4 to vec3
+
+       uniform mat4 uModelMatrix;
+       uniform mat4 uViewMatrix; // Perspective matrix
+
+       void main(void) {
+         gl_Position = uViewMatrix * uModelMatrix * vec4(aCoordinates, 1.0); // 1 de la homogénea porque es un vector de 3
+         gl_PointSize = 10.0;
+       }       
+  </script>
+
+     
+  <!-- fragment Shader -->
+  <script id="fragment-shader" type="x-shader/x-fragment">
+      #version 300 es
+      precision mediump float;
+      
+      uniform vec4 uColor;
+
+      out vec4 fragColor;
+
+      void main(void) {
+        fragColor = uColor;
+    }
+  </script>
+     
+
+   <script>
+     
+    var modelMatrix;
+    var viewMatrix;
+    var matrixStack = [];
+
+    function glPushMatrix() {
+         const matrix = mat4.create();
+         mat4.copy(matrix, modelMatrix);
+         matrixStack.push(matrix);
+       }
+       
+    function glPopMatrix() {
+         modelMatrix = matrixStack.pop();
+       }
+     
+     var canvas;
+     var colorLoc;
+     var modelMatrixLoc; 
+     var vertexBuffer;
+     var index_buffer;
+     var rotateX = 0, rotateY = 0
+     var mouseX, mouseY;
+     var zoomFactor = 1;
+     
+     var player = { x: 0, y: 0.8, z: 10, angle: -Math.PI / 2 }
+     
+     //*****************************************************
+     
+     // 1) pintamos un cubo usando el vector de vértices
+     function glRenderCubeVBO() {
+       glPushMatrix();
+         mat4.translate(modelMatrix, modelMatrix, [-0.5, -0.5, -0.5]);
+         gl.uniformMatrix4fv(modelMatrixLoc, false, modelMatrix);
+         arrayV = new Float32Array([0,0,0, 1,0,0, 1,1,0, 0,1,0,
+                                    0,0,1, 1,0,1, 1,1,1, 0,1,1]);
+         gl.bufferData(gl.ARRAY_BUFFER, arrayV, gl.STATIC_DRAW);
+         gl.drawArrays(gl.LINE_LOOP, 0, 8);
+         delete arrayV;
+       glPopMatrix();
+      }
+
+     // 2) pintamos un cubo usando un vector índices
+     function glRenderCubeIBO(pos1, pos2, col1, col2, col3, cubeSize, ind = false, edg = false, rot = false) { // IBO -> Index Buffer Object
+       glPushMatrix();
+         mat4.translate(modelMatrix, modelMatrix, [pos1, 0.005, pos2]); // 0.005 so the floor is closer to the cube
+         if (rot) modelMatrix = mat4.rotateY(modelMatrix, modelMatrix, 1.57);
+         gl.uniformMatrix4fv(modelMatrixLoc, false, modelMatrix);
+       // New array with cube vertices
+         arrayV = new Float32Array(cubeSize);
+         gl.bufferData(gl.ARRAY_BUFFER, arrayV, gl.STATIC_DRAW);
+       // pinto las aristas
+       // New array with indexes - 16 bytes can be used or 1 byte if more than 256 indexes are not to be used
+         if (edg) {
+            arrayI = new Uint16Array([0,1,1,2,2,3,3,0,
+                                   4,5,5,6,6,7,7,4,
+                                   0,4,1,5,2,6,3,7]);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, arrayI, gl.STATIC_DRAW);
+            gl.uniform4fv(colorLoc, [0, 0, 0, 1]);
+         }
+       // Paints indexes - UNSIGNED_SHORT because its 16 bytes
+        if (ind) gl.drawElements(gl.LINES, 24, gl.UNSIGNED_SHORT, 0);
+       
+       // pinto las caras
+        arrayF = new Uint16Array([
+          0, 3, 2, 2, 1, 0, 4, 5, 6, 4, 6, 7, 7, 6, 2, 7, 2, 3, 5, 4, 0, 0, 1,
+          5, 1, 2, 6, 1, 6, 5, 0, 4, 7, 7, 3, 0,
+        ]);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, arrayF, gl.STATIC_DRAW);
+        gl.uniform4fv(colorLoc, [col1, col2, col3, 1]);
+        gl.drawElements(gl.TRIANGLES, 36, gl.UNSIGNED_SHORT, 0);
+       
+         delete arrayV;
+         delete arrayI;
+       glPopMatrix();
+      }
+     
+     // 3) pintamos un suelo (en el plano x, z)
+     function glRenderGround(size, n) {
+       glPushMatrix();
+         mat4.scale(modelMatrix, modelMatrix, [size, size, size]);
+         mat4.translate(modelMatrix, modelMatrix, [-0.5, 0, -0.5]);
+         gl.uniformMatrix4fv(modelMatrixLoc, false, modelMatrix);
+
+         // creamos vector vértices
+         k = 0;
+         arrayV = new Float32Array(12*n);
+         for (i = 0; i < n; i++) {
+          arrayV[k++] = i/(n-1);
+          arrayV[k++] = 0;
+          arrayV[k++] = 0;
+          arrayV[k++] = i/(n-1);
+          arrayV[k++] = 0;
+          arrayV[k++] = 1;
+        }
+        for (i = 0; i <= n; i++) {
+          arrayV[k++] = 0;
+          arrayV[k++] = 0;
+          arrayV[k++] = i/(n-1);
+          arrayV[k++] = 1;
+          arrayV[k++] = 0;
+          arrayV[k++] = i/(n-1);
+        }
+        gl.bufferData(gl.ARRAY_BUFFER, arrayV, gl.STATIC_DRAW);
+        gl.drawArrays(gl.LINES, 0, 4*n);
+        delete arrayV;
+      glPopMatrix();
+     }
+
+     //****************************************************
+     
+     function init() {
+       
+       // ============ STEP 1: Creating a canvas=================
+       canvas = document.getElementById('my_Canvas');
+       gl = canvas.getContext('webgl2'); 
+
+       //======= STEP 2: Defining and storing the geometry=======
+
+       var vertices = [
+         -0.8,0.5,
+         0.0,0.5,
+         -0.25,0.25,
+         0.0, 0.0
+       ];
+
+       // Create an empty buffer object to store the vertex buffer
+       vertex_buffer = gl.createBuffer();
+       index_buffer = gl.createBuffer(); // Store the index buffer
+       
+       gl.enable(gl.DEPTH_TEST); // Enable depth to paint cube lines
+
+       //========== STEP 3: Create and compile shaders ==========
+
+       // Create a vertex shader object
+       var vertShader = gl.createShader(gl.VERTEX_SHADER);
+
+       // Attach vertex shader source code
+       var script = document.getElementById('vertex-shader');
+       var shaderString = script.text.trim();
+       gl.shaderSource(vertShader, shaderString);
+
+       // Compile the vertex shader
+       gl.compileShader(vertShader);
+       if (!gl.getShaderParameter(vertShader, gl.COMPILE_STATUS)) {
+          console.error("vertShader: " + gl.getShaderInfoLog(vertShader));
+          return null;
+         }
+
+       // Create fragment shader object
+       var fragShader = gl.createShader(gl.FRAGMENT_SHADER);
+
+       // Attach fragment shader source code
+       script = document.getElementById('fragment-shader');
+       shaderString = script.text.trim();
+       gl.shaderSource(fragShader, shaderString);
+
+       // Compile the fragmentt shader
+       gl.compileShader(fragShader);
+       if (!gl.getShaderParameter(fragShader, gl.COMPILE_STATUS)) {
+           console.error("fragShader: " + gl.getShaderInfoLog(fragShader));
+           return null;
+         }
+
+       // Create a shader program object to store
+       // the combined shader program
+       var shaderProgram = gl.createProgram();
+
+       // Attach a vertex shader
+       gl.attachShader(shaderProgram, vertShader); 
+
+       // Attach a fragment shader
+       gl.attachShader(shaderProgram, fragShader);
+
+       // Link both programs
+       gl.linkProgram(shaderProgram);
+
+       // Use the combined shader program object
+       gl.useProgram(shaderProgram);
+
+       //======== STEP 4: Associating shaders to buffer objects ========
+
+       // Bind vertex buffer object
+       gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+
+       // Get the attribute location
+       var coordLocation = gl.getAttribLocation(shaderProgram, "aCoordinates");
+     
+       // obtener la location del color
+       colorLoc = gl.getUniformLocation(shaderProgram, "uColor");
+       
+       // look up uniform modelMatrix location
+       modelMatrixLoc = gl.getUniformLocation(shaderProgram, "uModelMatrix");
+       viewMatrixLoc = gl.getUniformLocation(shaderProgram, "uViewMatrix");
+
+       // Point an attribute to the currently bound VBO
+       gl.vertexAttribPointer(coordLocation, 3, gl.FLOAT, false, 0, 0); // Vertex types - float
+
+       // Enable the attribute
+       gl.enableVertexAttribArray(coordLocation);
+
+       // Unbind the buffer
+       gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+      time=0;
+      cube.render(time);
+       
+       document.onkeydown = cube.keyDown;
+       document.onmousemove = cube.onMouseMove;
+       document.onmousedown = cube.onMouseDown;
+       document.onwheel = cube.zoom;
+    
+     }
+     
+     var cubeFunctions = {
+       
+       render(time) {
+         //console.log('tiempo='+time);
+
+            //========= STEP 5: Drawing the primitive ===============
+         // Clear the canvas
+         gl.clearColor(0.6, 0.4, 0.5, 1.0);
+
+         // Clear the color buffer bit or the buffer z
+         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+         // Set the view port
+         gl.viewport(0,0,canvas.width,canvas.height);
+
+         // activamos los buffers
+         gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+
+         // Set the model Matrix
+         modelMatrix = mat4.create();
+         mat4.identity(modelMatrix);
+         
+         // Add perspective - first we rotate and then we add perspective
+         // Parameters: matrix, angle (Math.Pi/4 = 45º aprox), canvas ratio, front z, back z 
+         viewMatrix = mat4.create();
+         mat4.perspective(viewMatrix, Math.PI/4, 1, 0.3, 30);
+         gl.uniformMatrix4fv(viewMatrixLoc, false, viewMatrix); // 4x4 float matrix 
+         // mat4.translate(modelMatrix, modelMatrix, [0, 0, -10]);
+        //  eye = [player.x, player.y, player.z];
+         eye = [0, 0.8, 10];
+         v = [player.x + Math.cos(player.angle), player.y, player.z + Math.sin(player.angle)];
+         mat4.lookAt(modelMatrix, eye, v, [0, 1, 0]);
+         
+         // Add mouse events         
+         mat4.rotateX(modelMatrix, modelMatrix, rotateX); // Cube rotation - X axis
+         mat4.rotateY(modelMatrix, modelMatrix, rotateY); // Cube rotation - Y axis
+         mat4.scale(modelMatrix, modelMatrix, [zoomFactor, zoomFactor, zoomFactor]); // Zoom in & zoom out
+         
+         // pintamos suelo
+         gl.uniform4f(colorLoc, 0, 0, 0, 1);
+         glRenderGround(15, 15);
+
+         // -------------------------------------------------------- Painting laberynth objects --------------------------------------------------------
+         //  [0 - abajo der detr, 1 - abajo izq detr, 2 - arriba izq detr, 3 - arriba der detr, 4 - abajo der detr, 5 - abajo izq del, 6 - arriba izq del, 7 - arriba der del]
+         glRenderCubeIBO(-0.5, -0.5, 1, 1, 0, [0,0,0, 1,0,0, 1,1,0, 0,1,0, 0,0,1, 1,0,1, 1,1,1, 0,1,1], true, true); // Cube
+
+         // Eastern walls
+         glRenderCubeIBO(6.5, 0.05, 0, 0, 1, [0,0,7.45, 1,0,7.45, 1,1,7.45, 0,1,7.45, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - se 6x1
+         glRenderCubeIBO(6.5, -6.4, 0, 0, 1, [0,0,3.2, 1,0,3.2, 1,1,3.2, 0,1,3.2, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - ne 2x1
+         glRenderCubeIBO(5.35, -3.2, 0, 0, 1, [0,0,4.25, 2.15,0,4.25, 2.15,1,4.25, 0,1,4.25, 0,0,1, 2.15,0,1, 2.15,1,1, 0,1,1]); // Wall - e 3x2
+         glRenderCubeIBO(4.25, -8.55, 0, 0, 1, [0,0,3.15, 3.25,0,3.15, 3.25,1,3.15, 0,1,3.15, 0,0,1, 3.25,0,1, 3.25,1,1, 0,1,1]); // Wall - ne 3x2
+         glRenderCubeIBO(4.35, -2.1, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - e c 1x1
+
+         // Western walls
+         glRenderCubeIBO(-7.5, -1.05, 0, 0, 1, [0,0,3.25, 2.15,0,3.25, 2.15,1,3.25, 0,1,3.25, 0,0,1, 2.15,0,1, 2.15,1,1, 0,1,1]); // Wall - w 2x2
+         glRenderCubeIBO(-7.5, 2.25, 0, 0, 1, [0,0,5.25, 1,0,5.25, 1,1,5.25, 0,1,5.25, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - sw 4x1
+         glRenderCubeIBO(-7.5, -8.55, 0, 0, 1, [0,0,8.5, 1,0,8.5, 1,1,8.5, 0,1,8.5, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - nw 7x1
+         glRenderCubeIBO(-6.48, 2.25, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - se c 1x1
+         glRenderCubeIBO(-6.5, -4.23, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - w c 1x1
+
+         // Southern walls
+         glRenderCubeIBO(-6.5, 5.5, 0, 0, 1, [0,0,2, 5.45,0,2, 5.45,1,2, 0,1,2, 0,0,1, 5.45,0,1, 5.45,1,1, 0,1,1]); // Wall - sw 6x1
+         glRenderCubeIBO(1.05, 5.5, 0, 0, 1, [0,0,2, 5.45,0,2, 5.45,1,2, 0,1,2, 0,0,1, 5.45,0,1, 5.45,1,1, 0,1,1]); // Wall - se 6x1
+
+         // Northern walls
+         glRenderCubeIBO(-5.4, -8.55, 0, 0, 1, [0,0,2, 9.65,0,2, 9.65,1,2, 0,1,2, 0,0,1, 9.65,0,1, 9.65,1,1, 0,1,1]); // Wall - n 9x1
+         glRenderCubeIBO(-3.25, -7.55, 0, 0, 1, [0,0,2, 4.35,0,2, 4.35,1,2, 0,1,2, 0,0,1, 4.35,0,1, 4.35,1,1, 0,1,1]); // Wall - n 4x1
+         glRenderCubeIBO(-1.1, -6.55, 0, 0, 1, [0,0,2, 2.2,0,2, 2.2,1,2, 0,1,2, 0,0,1, 2.2,0,1, 2.2,1,1, 0,1,1]); // Wall - n 2x1
+
+         // Centered walls
+         glRenderCubeIBO(-2.15, 3.4, 0, 0, 1, [0,0,2, 4.3,0,2, 4.3,1,2, 0,1,2, 0,0,1, 4.3,0,1, 4.3,1,1, 0,1,1]); // Wall - s c 4x1
+         glRenderCubeIBO(-2.15, -4.2, 0, 0, 1, [0,0,2, 4.3,0,2, 4.3,1,2, 0,1,2, 0,0,1, 4.3,0,1, 4.3,1,1, 0,1,1]); // Wall - n c 4x1
+         glRenderCubeIBO(4.3, 3.25, 0, 0, 1, [0,0,3.25, 1,0,3.25, 1,1,3.25, 0,1,3.25, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - se c 2x1
+         glRenderCubeIBO(3.3, 3.25, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - se c 1x1
+         glRenderCubeIBO(-5.38, 4.5, 0, 0, 1, [0,0,2, 2.2,0,2, 2.2,1,2, 0,1,2, 0,0,1, 2.2,0,1, 2.2,1,1, 0,1,1]); // Wall - sw c 2x1
+         glRenderCubeIBO(-4.2, 2.2, 0, 0, 1, [0,0,3.3, 1,0,3.3, 1,1,3.3, 0,1,3.3, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - sw c 2x1
+         glRenderCubeIBO(-4.2, 1.2, 0, 0, 1, [0,0,2, 2.2,0,2, 2.2,1,2, 0,1,2, 0,0,1, 2.2,0,1, 2.2,1,1, 0,1,1]); // Wall - se c 2x1
+         glRenderCubeIBO(2.15, 0, 0, 0, 1, [0,0,3.25, 2.15,0,3.25, 2.15,1,3.25, 0,1,3.25, 0,0,1, 2.15,0,1, 2.15,1,1, 0,1,1]); // Wall - e c 2x2
+         glRenderCubeIBO(4.3, 1.15, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - e c 1x1
+         glRenderCubeIBO(-1.08, 0, 0, 0, 1, [0,0,3.25, 2.15,0,3.25, 2.15,1,3.25, 0,1,3.25, 0,0,1, 2.15,0,1, 2.15,1,1, 0,1,1]); // Wall - c 2x2
+         glRenderCubeIBO(2.15, -2.1, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - e c 1x1
+         glRenderCubeIBO(1.07, -2.1, 0, 0, 1, [0,0,3.25, 1.08,0,3.25, 1.08,1,3.25, 0,1,3.25, 0,0,1, 1.08,0,1, 1.08,1,1, 0,1,1]); // Wall - e c 2x1 FAT
+         glRenderCubeIBO(-3.2, -2.1, 0, 0, 1, [0,0,3.25, 2.15,0,3.25, 2.15,1,3.25, 0,1,3.25, 0,0,1, 2.15,0,1, 2.15,1,1, 0,1,1]); // Wall - w c 2x2
+         glRenderCubeIBO(-4.2, -0.95, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - w c 1x1
+         glRenderCubeIBO(0.1, -3.2, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - c 1x1
+         glRenderCubeIBO(2.15, -6.45, 0, 0, 1, [0,0,3.25, 1.08,0,3.25, 1.08,1,3.25, 0,1,3.25, 0,0,1, 1.08,0,1, 1.08,1,1, 0,1,1]); // Wall - ne c 2x1 FAT
+         glRenderCubeIBO(3.2, -5.35, 0, 0, 1, [0,0,3.25, 1.08,0,3.25, 1.08,1,3.25, 0,1,3.25, 0,0,1, 1.08,0,1, 1.08,1,1, 0,1,1]); // Wall - ne c 2x1 FAT
+         glRenderCubeIBO(4.28, -5.35, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - ne c 1x1
+         glRenderCubeIBO(-5.5, -3.15, 0, 0, 1, [0,0,2.08, 2.3,0,2.08, 2.3,1,2.08, 0,1,2.08, 0,0,1, 2.3,0,1, 2.3,1,1, 0,1,1]); // Wall - w c 2x1 FAT
+         glRenderCubeIBO(-6.5, -6.35, 0, 0, 1, [0,0,2.08, 2.3,0,2.08, 2.3,1,2.08, 0,1,2.08, 0,0,1, 2.3,0,1, 2.3,1,1, 0,1,1]); // Wall - nw c 2x1 FAT
+         glRenderCubeIBO(-4.25, -5.3, 0, 0, 1, [0,0,2.1, 1,0,2.1, 1,1,2.1, 0,1,2.1, 0,0,1, 1,0,1, 1,1,1, 0,1,1]); // Wall - nw c 1x1
+
+         //  Enemies
+         // [0 - abajo der detr, 1 - abajo izq detr, 2 - arriba izq detr, 3 - arriba der detr, 4 - abajo der del, 5 - abajo izq del, 6 - arriba izq del, 7 - arriba der del]
+         glRenderCubeIBO(-1.98, -5.8, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75]); // Enemy - n
+         glRenderCubeIBO(-6.35, -2.65, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75]); // Enemy - w
+         glRenderCubeIBO(-6.9, -3.4, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75], false, false, true); // Enemy - w2
+         glRenderCubeIBO(1.22, 0.6, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75]); // Enemy - s c
+         glRenderCubeIBO(1.22, 0.6, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75]); // Enemy - e c
+         glRenderCubeIBO(2.3, -3.65, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75]); // Enemy - n c
+         glRenderCubeIBO(-6.25, 4.9, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75]); // Enemy - sw
+         glRenderCubeIBO(5.5, 4.9, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75]); // Enemy - se
+         glRenderCubeIBO(2.75, 6.25, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75], false, false, true); // Enemy - s
+         glRenderCubeIBO(1.65, 0.9, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75], false, false, true); // Enemy - c e
+         glRenderCubeIBO(-4.75, -0.15, 1, 0, 0, [0,0,1.25, 0.75,0,1.25, 0.375,0.75,1.25, 0.375,0,1.25, 0,0,0.75, 0.75,0,0.75, 0.375,0.75,0.75, 0.375,0.75,0.75], false, false, true); // Enemy - c e
+
+         // Doors
+         glRenderCubeIBO(-6.5, -8.55, 1, 0, 1, [0,0,2, 1.1,0,2, 1.1,1,2, 0,1,2, 0,0,1, 1.1,0,1, 1.1,1,1, 0,1,1]); // Door - nw 1x1
+         glRenderCubeIBO(-8.5, 3.25, 1, 0, 1, [0,0,2, 1.1,0,2, 1.1,1,2, 0,1,2, 0,0,1, 1.1,0,1, 1.1,1,1, 0,1,1], false, false, true); // Door - sw 1x1
+
+         // ---------------------------------------------------------------------------------------------------------------------------------------------
+
+         // bucle de animación
+         window.requestAnimationFrame(cube.render);
+       },
+       
+       onMouseMove: function (e) {
+         // Rotation changed after adding depth to the cube - add or substract rotation
+         if (e.buttons == 1) {
+           rotateY += (e.pageX - mouseX) * 0.01; // 0.01 indicates rotation speed
+           mouseX = e.pageX;
+           
+           rotateX -= (e.pageY - mouseY) * 0.01; // 0.01 indicates rotation speed
+           mouseY = e.pageY;
+         }
+       },
+       
+       onMouseDown: function (e) {
+         if (e.buttons == 1 && e.srcElement == canvas) {
+           mouseX = e.pageX;
+           mouseY = e.pageY;
+         }
+       },
+       
+       zoom: function (e) {
+         // deltaY detects how much the mouse wheel was moved - positive or negative
+         // Calculate a percentage (10% more/less zoom) - adjustable zoom
+         if (e.deltaY < 0) zoomFactor *= 1.1;
+         else zoomFactor *= 0.9;
+       },
+       
+       keyDown: function (key) {
+         switch (key.keyCode) { // Arrow key movement
+           case 38: // Moving forward || x = Xo + tUx
+             player.x += 0.1 * Math.cos(player.angle);
+             player.z += 0.1 * Math.sin(player.angle);
+             break;
+           case 40: // Moving backwards || y = Zo + tUz
+             player.x -= 0.1 * Math.cos(player.angle);
+             player.z -= 0.1 * Math.sin(player.angle);
+             break;
+           case 37: player.angle -= 0.02; break; // Moving left
+           case 39: player.angle += 0.02; break; // Moving right
+         }
+       },
+     }
+     
+     cube = Object.assign({}, cubeFunctions);
+     window.onload =init;
+
+   </script>
+   
+   </body>
+</html>
