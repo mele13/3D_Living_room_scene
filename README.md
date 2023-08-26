@@ -3,9 +3,7 @@
 Welcome to the 3D Living Room Scene project! This project showcases a simple interactive 3D environment of a living room where you can explore and interact with various objects. The scene is built using WebGL and features basic 3D rendering, object movement, collision detection, and user input handling.
 
 **Please Note: This project is developed solely for a university project.**
-
-![ezgif com-video-to-gif](https://github.com/mele13/3D_Living_room_scene/assets/87198060/7d7b83cf-85e5-4f04-a969-b0182e638497)
-
+![ezgif com-video-to-gif](https://github.com/mele13/3D_Living_room_scene/assets/87198060/e83411fd-edab-4b9d-ad93-a21bff18c4f6)
 
 ## Table of Contents
 - [Features](#features)
